@@ -125,9 +125,8 @@ AutoEIT/
 ├── autoeit_transcriber.py      ← Stage 2: alignment + Excel write
 ├── requirements.txt
 ├── notebooks/
-│   └── AutoEIT.ipynb           ← self-contained Colab notebook
-└── outputs/
-    └── AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx
+├── AutoEIT.ipynb           ← self-contained Colab notebook
+└── AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx
 ```
 
 ---
