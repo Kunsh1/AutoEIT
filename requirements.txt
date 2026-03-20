@@ -1,0 +1,19 @@
+# AutoEIT — Python Dependencies
+# Install order matters. Run in this sequence:
+#
+#   pip install torch torchvision torchaudio --upgrade
+#   pip install whisperx
+#   pip install -r requirements.txt
+
+# Stage 1 — Speaker separation & transcription
+whisperx
+pydub
+soundfile
+
+# Stage 2 — Sentence alignment & Excel output
+rapidfuzz
+openpyxl
+langdetect
+
+# HuggingFace (diarization model download)
+huggingface_hub
