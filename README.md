@@ -119,7 +119,7 @@ Whisper is prompted to follow the official EIT transcription rules:
 ## File Structure
 
 ```
-autoeit-gsoc2026/
+AutoEIT/
 ├── README.md
 ├── speaker_separator.py        ← Stage 1: WhisperX + diarization
 ├── autoeit_transcriber.py      ← Stage 2: alignment + Excel write
