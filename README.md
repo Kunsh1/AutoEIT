@@ -1,26 +1,33 @@
 # AutoEIT — Automated EIT Transcription Pipeline
-### GSoC 2026 Evaluation | HumanAI Foundation (NIU + University of Alabama)
+### GSoC 2026 Evaluation Submission | HumanAI Foundation (NIU + University of Alabama)
+
+**Proposal:** [Audio-to-text transcription for second/additional language learner data](https://humanai.foundation/gsoc/2026/proposal_AutoEIT1.html)  
+**Mentors:** Mandy Faretta-Stutenberg (NIU), Xabier Granja (University of Alabama)
 
 ---
 
 ## Results
 
-| Participant | File | Responses Filled | Notes |
-|:---:|---|:---:|---|
-| 038010 | EIT-2A | 29/30 | Sentence 19: no detectable response |
-| 038011 | EIT-1A | 30/30 | |
-| 038012 | EIT-2A | 28/30 | Low-proficiency participant; 2 sentences unintelligible |
-| 038015 | EIT-1A | 30/30 | |
+| Participant | Sheet | Responses | [no response] | Total filled |
+|:---:|---|:---:|:---:|:---:|
+| 038010 | 38010-2A | 29 | 1 | 30/30 |
+| 038011 | 38011-1A | 30 | 0 | 30/30 |
+| 038012 | 38012-2A | 29 | 1 | 30/30 |
+| 038015 | 38015-1A | 30 | 0 | 30/30 |
 
-**117 / 120 sentences transcribed across 4 participants.**
+**120 / 120 cells filled. 118 participant responses + 2 `[no response]`.**
+
+Manually reviewed and corrected where noted in cell comments (Excel Review → Comments).
 
 ---
 
 ## What This Does
 
-Automates transcription of Spanish Elicited Imitation Task (EIT) recordings.
+Automates transcription of Spanish Elicited Imitation Task (EIT) recordings for Test I.
 
-In the EIT, participants listen to 30 sentences of increasing grammatical complexity (7–18 syllables) and repeat back as much as they recall. Their responses are transcribed and scored 0–4 based on meaning preservation. This pipeline automates the transcription step.
+In the EIT, participants listen to 30 sentences of increasing grammatical complexity (7–18 syllables) and repeat back as much as they recall. Recordings are then transcribed and scored 0–4 based on meaning preservation. This pipeline automates the transcription step.
+
+**The central challenge:** Each recording captures two voices on a single channel — the EIT playback (recorded native-speaker sentences) and the participant's response. Speaker diarization separates them. Fuzzy matching then maps each transcribed segment to the correct sentence number.
 
 ---
 
@@ -32,50 +39,51 @@ In the EIT, participants listen to 30 sentences of increasing grammatical comple
         ▼
 speaker_separator.py
    WhisperX large-v3 + pyannote speaker diarization
-   Separates the two voices (experimenter + learner)
-   → output/<id>/transcript.txt  (timestamped, speaker-labelled)
-   → output/<id>/speaker_1.mp3  (isolated audio per speaker)
+   → output/<id>/transcript.txt   (timestamped, speaker-labelled)
+   → output/<id>/speaker_1.mp3    (isolated audio per speaker)
+   → output/<id>/speaker_2.mp3
         │
         ▼
 autoeit_transcriber.py
-   Finds English/Spanish boundary
-   Fuzzy-matches segments to 30 EIT stimuli
-   Missing sentences → [no response]
-   → AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx (column C)
+   1. Find English/Spanish boundary (auto-detected via langdetect)
+   2. Discard English practice section + instruction segments
+   3. Fuzzy-match remaining segments to 30 EIT stimuli
+   4. Write responses to column C; missing → [no response]
+   → AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx
 ```
 
 ---
 
 ## Audio Structure
 
-Each recording has this structure — critical for correct processing:
+Each recording:
 
 ```
-[0s – ~74s]     Silence
-[~74s – ~121s]  English instructions + practice sentences  ← auto-skipped
-[~121s – ~154s] Long silence — English/Spanish boundary
+[0s – ~74s]     Silence / room noise
+[~74s – ~121s]  English instructions + practice  ← auto-skipped
+[~121s – ~154s] Long silence (English/Spanish boundary)
 [~154s – end]   30 Spanish EIT trials
 
   Each trial:
-  ┌─────────────────────────────────────────────────┐
-  │  Recorded stimulus plays  (~1–4s)               │
-  │  Short pause + tone beep                        │
-  │  Participant responds     (~0.2–3s)             │
-  └─────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────┐
+  │  Recorded Spanish stimulus plays  (1–4s)            │
+  │  Short pause + tone beep                            │
+  │  Participant responds             (0.2–3s)          │
+  └─────────────────────────────────────────────────────┘
   Inter-trial silence (5–15s)
 ```
 
-The boundary between English and Spanish is auto-detected by finding the last English-language segment within the first 35% of the recording (via `langdetect`), falling back to the largest silence gap if needed.
+The English/Spanish boundary is auto-detected by finding the last English-language segment within the first 35% of the recording using `langdetect`, with silence-gap fallback.
 
 ---
 
 ## How to Run
 
-### Option A — Colab notebook (recommended)
+### Option A — Colab Notebook (recommended)
 
-Open `notebooks/AutoEIT.ipynb` in Google Colab, set runtime to **T4 GPU**, and follow sections 1–5.
+Open `notebooks/AutoEIT.ipynb` in Google Colab → set runtime to **T4 GPU** → run sections 1–5 top to bottom.
 
-### Option B — Command line
+### Option B — Command Line
 
 ```bash
 # Install (order matters)
@@ -83,50 +91,50 @@ pip install torch torchvision torchaudio --upgrade
 pip install whisperx
 pip install -r requirements.txt
 
-# Stage 1: transcribe + diarise all mp3s in ./input/
+# Place mp3 files in ./input/
+# Place AutoEIT Sample Audio for Transcribing.xlsx in ./
+
+# Stage 1: transcribe + diarise (~8–12 min per file on GPU)
 python speaker_separator.py
 
-# Stage 2: align to sentences + write Excel
+# Stage 2: align to sentences + fill Excel (~1 min)
 python autoeit_transcriber.py
 ```
 
 ### HuggingFace Token (required for Stage 1)
 
-Speaker diarization uses pyannote, which requires a free HuggingFace token:
-1. Create account at huggingface.co
-2. Accept the license at [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-3. Generate a token at huggingface.co/settings/tokens
-4. In Colab: add as secret `HF_TOKEN` (🔑 icon in left sidebar)
-5. On CLI: `export HF_TOKEN=your_token_here`
+```bash
+# 1. Accept license: https://huggingface.co/pyannote/speaker-diarization-3.1
+# 2. Generate token: https://huggingface.co/settings/tokens
+# 3a. Colab: add as secret named HF_TOKEN (🔑 icon in left sidebar)
+# 3b. CLI: export HF_TOKEN=your_token_here
+```
 
 ---
 
-## Transcription Protocol
+## Alignment Engine
 
-Whisper is prompted to follow the official EIT transcription rules:
+The sentence alignment in `autoeit_transcriber.py` uses **anchor gravity** — each of the 30 stimuli gets a position bonus (12 / 8 / 4 pts) pulling uncertain matches toward the expected sentence number. This handles:
 
-- Preserve all learner errors — never correct grammar or vocabulary
-- `...` for pauses
-- `[la-] las` bracket notation for false starts
-- English code-switching kept verbatim
-- Afterthoughts included as spoken
-- Stuttering preserved: `co-co-comerme`
-- `[no response]` for silence or unintelligible output
-- Prompt-leak guard: segments containing Whisper's own prompt text are automatically discarded
+- `ASSIGN` — solid fuzzy match (score ≥ 40)
+- `GUESS` — weak match, position anchor used
+- `CONCAT` — continuation of previous response
+- `OVERWRITE` — better match than stored
+- `REPLACE (RESTART)` — participant restarted the test
+- `IGNORE (WEAK)` — discarded (instruction / prompt-leak / too ambiguous)
+
+Split merged segments are recovered by trying `...`-boundary splits first, then brute-forcing word boundaries.
 
 ---
 
 ## File Structure
 
 ```
-AutoEIT/
+autoeit-gsoc2026/
 ├── README.md
-├── speaker_separator.py        ← Stage 1: WhisperX + diarization
-├── autoeit_transcriber.py      ← Stage 2: alignment + Excel write
+├── speaker_separator.py        ← Stage 1: WhisperX + pyannote diarization
+├── autoeit_transcriber.py      ← Stage 2: fuzzy alignment + Excel write
 ├── requirements.txt
-├── notebooks/
-├── AutoEIT.ipynb           ← self-contained Colab notebook
+├── AutoEIT.ipynb               ← self-contained Colab notebook
 └── AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx
 ```
-
----

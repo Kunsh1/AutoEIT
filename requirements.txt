@@ -1,5 +1,5 @@
 # AutoEIT — Python Dependencies
-# Install order matters. Run in this sequence:
+# Install in this order:
 #
 #   pip install torch torchvision torchaudio --upgrade
 #   pip install whisperx
@@ -15,5 +15,5 @@ rapidfuzz
 openpyxl
 langdetect
 
-# HuggingFace (diarization model download)
+# HuggingFace (pyannote diarization model)
 huggingface_hub

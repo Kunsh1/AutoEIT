@@ -76,7 +76,6 @@ EIT_STIMULI_SPANISH = [
     "¿Serías tan amable de darme el libro que está en la mesa?",
     "Hay mucha gente que no toma nada para el desayuno",
 ]
-
 # ──────────────────────────────────────────────────────────────────────────────
 
 COLORS = {
@@ -112,8 +111,13 @@ def check_requirements():
         sys.exit(1)
 
 
+import unicodedata
+
 def normalize(text):
     text = text.lower()
+    # Strip accents
+    text = ''.join(c for c in unicodedata.normalize('NFD', text)
+                   if unicodedata.category(c) != 'Mn')
     text = re.sub(r"[¿¡.,!?;:\"'«»\-]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -218,10 +222,7 @@ def should_skip(text):
     for phrase in SPANISH_INSTRUCTION_PHRASES:
         if phrase in text_norm:
             return True
-    return False
-
-
-def parse_transcript(transcript_path):
+    return Falsedef parse_transcript(transcript_path):
     """
     Parse transcript.txt → list of {start_sec, end_sec, text}.
     Handles lines like:  [02:34 → 02:37]  Speaker 1   El libro está...
@@ -240,6 +241,12 @@ def parse_transcript(transcript_path):
                 continue
             raw_text = m.group(3).strip()
             text     = re.sub(r"^(Speaker\s*\d+|Unknown)\s+", "", raw_text, flags=re.IGNORECASE).strip()
+
+            # ── NEW: Fix Whisper's missing spaces after punctuation ──
+            # Turns "tranquilo.Quiero" into "tranquilo. Quiero"
+            text = re.sub(r'([.?!])([A-Za-z¿¡])', r'\1 \2', text)
+            # ─────────────────────────────────────────────────────────
+
             if text:
                 segments.append({
                     "start": to_sec(m.group(1)),
@@ -302,12 +309,10 @@ def find_spanish_boundary(segments):
         print(f"    ⚠️  Boundary fallback: using absolute last English segment (#{last_absolute_english})")
         return last_absolute_english + 1
 
-    return 0
-
-
-def split_merged_segment(text, stimuli):
+    return 0def split_merged_segment(text, stimuli):
     """
-    Detect and split segments containing TWO merged responses.
+    Detect and split segments containing MULTIPLE merged responses.
+    Uses recursion to handle 3+ sentences squeezed into one segment.
     """
     if "..." in text:
         parts_on_ellipsis = text.split("...")
@@ -324,13 +329,15 @@ def split_merged_segment(text, stimuli):
         for left, right in candidates:
             _, li, ls = best_stimulus_match(left,  stimuli)
             _, ri, rs = best_stimulus_match(right, stimuli)
-            if li != ri and ls >= 40 and rs >= 40:
+
+            # THE FIX: Ensure the right side doesn't time-travel backward
+            if li != ri and ls >= 40 and rs >= 40 and ri >= li - 2:
                 combined = ls + rs
                 if combined > best_score:
                     best_score, best_pair = combined, (left, right)
 
         if best_pair and best_score > single_score + 15:
-            return list(best_pair)
+            return split_merged_segment(best_pair[0], stimuli) + split_merged_segment(best_pair[1], stimuli)
 
     words = text.split()
     if len(words) < 8:
@@ -345,22 +352,170 @@ def split_merged_segment(text, stimuli):
         _, li, ls = best_stimulus_match(left,  stimuli)
         _, ri, rs = best_stimulus_match(right, stimuli)
 
-        if li != ri and ls >= 60 and rs >= 60:
+        # THE FIX: Ensure the right side doesn't time-travel backward wildly (ri >= li - 2)
+        if li != ri and ls >= 60 and rs >= 60 and ri >= li - 2:
             combined = ls + rs
             if combined > best_combined:
                 best_combined, best_pair = combined, (left, right)
 
     if best_pair and best_combined > single_score + 30:
-        return list(best_pair)
+        return split_merged_segment(best_pair[0], stimuli) + split_merged_segment(best_pair[1], stimuli)
 
     return [text]
 
+def fix_bleed_over(responses, stimuli):
+    """
+    Shifts trailing words that belong to the next sentence (Forward bleed)
+    AND leading words that belong to the previous sentence (Backward bleed).
+    """
+    # ── 1. FORWARD BLEED (tail of current belongs to head of next) ──
+    for i in range(1, 30):
+        if i in responses and (i + 1) in responses:
+            curr_words = responses[i].split()
+            next_stim_words = normalize(stimuli[i]).split() # stimuli is 0-indexed
+
+            if not curr_words or not next_stim_words:
+                continue
+
+            # Check 2-word forward bleed
+            if len(curr_words) >= 2 and len(next_stim_words) >= 2:
+                tail_2 = normalize(curr_words[-2] + " " + curr_words[-1])
+                head_2 = next_stim_words[0] + " " + next_stim_words[1]
+                if tail_2 == head_2:
+                    w2 = curr_words.pop()
+                    w1 = curr_words.pop()
+                    responses[i]   = " ".join(curr_words)
+                    responses[i+1] = f"{w1} {w2} {responses[i+1]}"
+                    continue
+
+            # Check 1-word forward bleed
+            if len(curr_words) >= 1 and len(next_stim_words) >= 1:
+                tail_1 = normalize(curr_words[-1])
+                head_1 = next_stim_words[0]
+                if tail_1 == head_1:
+                    w1 = curr_words.pop()
+                    responses[i]   = " ".join(curr_words)
+                    responses[i+1] = f"{w1} {responses[i+1]}"
+
+    # ── 2. BACKWARD BLEED (head of next belongs to tail of current) ──
+    for i in range(1, 30):
+        if i in responses and (i + 1) in responses:
+            next_words = responses[i+1].split()
+            curr_stim_words = normalize(stimuli[i-1]).split()
+
+            if not next_words or not curr_stim_words:
+                continue
+
+            # Check 2-word backward bleed
+            if len(next_words) >= 2 and len(curr_stim_words) >= 2:
+                head_2 = normalize(next_words[0] + " " + next_words[1])
+                tail_2 = curr_stim_words[-2] + " " + curr_stim_words[-1]
+                if head_2 == tail_2:
+                    w1 = next_words.pop(0)
+                    w2 = next_words.pop(0)
+                    responses[i]   = f"{responses[i]} {w1} {w2}"
+                    responses[i+1] = " ".join(next_words)
+                    continue
+
+            # Check 1-word backward bleed
+            if len(next_words) >= 1 and len(curr_stim_words) >= 1:
+                head_1 = normalize(next_words[0])
+                tail_1 = curr_stim_words[-1]
+                if head_1 == tail_1:
+                    w1 = next_words.pop(0)
+                    responses[i]   = f"{responses[i]} {w1}"
+                    responses[i+1] = " ".join(next_words)
+
+    return responses
+
+def remove_audio_echoes(text):
+    """
+    Removes invigilator tape bleed without breaking genuine L2 stutters.
+    Splits by any sentence boundary (..., ., ?, !).
+    If a 3+ word phrase is repeated, it deletes the first one (the echo).
+    """
+    import re
+
+    # Split text by ..., ., ?, or ! but keep the punctuation in the list
+    parts = re.split(r'(\.\.\.|\.|\?|!)', text)
+
+    # Group the text chunks with their matching punctuation
+    chunks = []
+    for i in range(0, len(parts) - 1, 2):
+        text_part = parts[i].strip()
+        punct = parts[i+1]
+        if text_part:
+            chunks.append((text_part, punct))
+
+    # Handle the very last piece of text if there's no punctuation at the end
+    if len(parts) % 2 != 0 and parts[-1].strip():
+        chunks.append((parts[-1].strip(), ""))
+
+    if len(chunks) < 2:
+        return text # Nothing to compare
+
+    cleaned_chunks = [chunks[0]]
+
+    for i in range(1, len(chunks)):
+        prev_text, prev_punct = cleaned_chunks[-1]
+        curr_text, curr_punct = chunks[i]
+
+        # ── THE STUTTER THRESHOLD ──
+        # Only compare if both phrases are 3+ words long
+        if len(prev_text.split()) >= 3 and len(curr_text.split()) >= 3:
+
+            # If they are practically identical (score > 80)
+            if fuzzy_score(prev_text, curr_text) > 80:
+                # Replace the invigilator's prompt with the student's attempt,
+                # keeping the student's ending punctuation.
+                cleaned_chunks[-1] = (curr_text, curr_punct)
+                continue
+
+        cleaned_chunks.append((curr_text, curr_punct))
+
+    # Recombine the cleaned text and punctuation
+    return " ".join([f"{t}{p}" for t, p in cleaned_chunks]).strip()
+
+def remove_cross_sentence_echoes(responses):
+    """
+    Removes full-phrase echoes that bleed across sentence boundaries.
+    Example:
+      Sentence 5: "¿Qué dices de qué pasa, héroe?"
+      Sentence 6: "¿Qué dices de qué pasa, héroe? Duro seca lezar también."
+                  -> becomes "Duro seca lezar también."
+    """
+    for i in range(1, 30):
+        if i in responses and (i + 1) in responses:
+            curr_resp = responses[i]
+            next_resp = responses[i+1]
+
+            curr_words = curr_resp.split()
+            next_words = next_resp.split()
+
+            # 1. Forward phrase bleed (Next sentence STARTS with current sentence)
+            if len(curr_words) >= 3 and len(next_words) > len(curr_words):
+                head_of_next = " ".join(next_words[:len(curr_words)])
+                # If they are practically identical, chop the echo off the next sentence
+                if fuzzy_score(curr_resp, head_of_next) > 85:
+                    responses[i+1] = " ".join(next_words[len(curr_words):]).strip()
+                    # Update variables in case we need them for the backward check
+                    next_resp = responses[i+1]
+                    next_words = next_resp.split()
+
+            # 2. Backward phrase bleed (Current sentence ENDS with next sentence)
+            if len(next_words) >= 3 and len(curr_words) > len(next_words):
+                tail_of_curr = " ".join(curr_words[-len(next_words):])
+                # If they are practically identical, chop the echo off the current sentence
+                if fuzzy_score(next_resp, tail_of_curr) > 85:
+                    responses[i] = " ".join(curr_words[:-len(next_words)]).strip()
+
+    return responses
 
 def extract_responses(segments, spanish_stimuli):
     responses = {}
-    expected_idx = 0
+    confident_anchor = 0  # The highest sentence index we've mapped CONFIDENTLY
 
-    print_header("  DYNAMIC ALIGNMENT (WITH AUTO-CORRECT & RESTART DETECT)")
+    print_header("  DYNAMIC ALIGNMENT (ANCHOR-BASED)")
 
     for i, seg in enumerate(segments):
         if should_skip(seg["text"]):
@@ -371,72 +526,89 @@ def extract_responses(segments, spanish_stimuli):
 
         for part in parts:
             best_idx  = -1
-            best_score = -1
+            best_score = -100
 
+            # ── 1. SCORE EVERY SENTENCE ──
             for j, stim in enumerate(spanish_stimuli):
-                base_score = fuzzy_score(part, stim)
+                raw_score = fuzzy_score(part, stim)
                 bonus = 0
-                if j == expected_idx:     bonus = 12
-                elif j == expected_idx+1: bonus = 8
-                elif j == expected_idx+2: bonus = 4
-                score = base_score + bonus
-                if score > best_score:
-                    best_score = score
+
+                # Bonus for chronological progression from our Anchor
+                if j == confident_anchor:     bonus = 10
+                elif j == confident_anchor+1: bonus = 20  # Strongly favor the next logical sentence
+                elif j == confident_anchor+2: bonus = 10
+
+                # Distance-based penalty to prevent ghost echoes.
+                # If anchor is 10, guessing sentence 9 gets -4 penalty. Guessing sentence 2 gets -32.
+                if j < confident_anchor:
+                    bonus -= (confident_anchor - j) * 4
+
+                final_score = raw_score + bonus
+                if final_score > best_score:
+                    best_score = final_score
                     best_idx   = j
 
             actual_fuzzy = fuzzy_score(part, spanish_stimuli[best_idx])
 
-            if actual_fuzzy >= 40:
-                target_idx   = best_idx
-                expected_idx = target_idx + 1
-            else:
-                target_idx = expected_idx
-                if expected_idx > 0:
-                    prev_idx = expected_idx - 1
-                    old_text = responses.get(prev_idx + 1, "")
-                    merged   = old_text + " " + part
-                    if fuzzy_score(merged, spanish_stimuli[prev_idx]) > fuzzy_score(old_text, spanish_stimuli[prev_idx]):
-                        target_idx   = prev_idx
-                        expected_idx = prev_idx + 1
+            # ── 2. MOVE THE ANCHOR ONLY IF WE ARE SURE ──
+            # This prevents a bad guess from destroying the rest of the file's alignment.
+            if actual_fuzzy >= 55 and best_idx > confident_anchor:
+                # Prevent runaway jumps (max 3 spots at a time) to contain chaos
+                if best_idx <= confident_anchor + 3:
+                    confident_anchor = best_idx
+
+            target_idx = best_idx
+            sentence_num = target_idx + 1
+            stimulus = spanish_stimuli[target_idx]
 
             if target_idx >= 30:
                 print(f"  {color('DROP (END)', 'dim')}  #{i:03d}  [past sentence 30] {part[:40]}...")
                 continue
 
-            sentence_num = target_idx + 1
-            stimulus     = spanish_stimuli[target_idx]
-
+            # ── 3. APPLY TO RESPONSES ──
             if sentence_num in responses:
                 old_text     = responses[sentence_num]
                 score_old    = fuzzy_score(old_text, stimulus)
-                score_new    = fuzzy_score(part, stimulus)
+                score_new    = actual_fuzzy
                 merged       = old_text + " " + part
                 score_merged = fuzzy_score(merged, stimulus)
 
-                if score_merged > max(score_old, score_new) + 2:
-                    responses[sentence_num] = merged
-                    print(f"  {color('CONCAT', 'yellow')}  #{i:03d}  →  sentence {sentence_num:02d}")
-                elif score_new > score_old + 3:
-                    responses[sentence_num] = part
-                    print(f"  {color('OVERWRITE', 'green')}  #{i:03d}  →  sentence {sentence_num:02d} (improved match)")
-                elif actual_fuzzy >= 40 and score_new >= score_old - 5:
-                    responses[sentence_num] = part
-                    print(f"  {color('REPLACE (RESTART)', 'cyan')}  #{i:03d}  →  sentence {sentence_num:02d}")
+                is_time_travel = target_idx < confident_anchor - 1
+
+                if is_time_travel:
+                    # Lock down past sentences to prevent stutters from ruining perfect matches
+                    if score_new > score_old + 20:
+                        responses[sentence_num] = part
+                        print(f"  {color('OVERWRITE (PAST)', 'green')}  #{i:03d}  →  sentence {sentence_num:02d} (massive improvement)")
+                    else:
+                        print(f"  {color('IGNORE (PAST ECHO)', 'dim')}  #{i:03d}  [ignored for {sentence_num:02d}] {part[:40]}...")
                 else:
-                    print(f"  {color('IGNORE (WEAK)', 'dim')}  #{i:03d}  [ignored for {sentence_num:02d}] {part[:40]}...")
+                    # Normal updating for active sentences
+                    if score_merged >= max(score_old, score_new) - 5:
+                        responses[sentence_num] = merged
+                        print(f"  {color('CONCAT', 'yellow')}  #{i:03d}  →  sentence {sentence_num:02d}")
+                    elif score_new > score_old + 5:
+                        responses[sentence_num] = part
+                        print(f"  {color('OVERWRITE', 'green')}  #{i:03d}  →  sentence {sentence_num:02d} (improved match)")
+                    else:
+                        print(f"  {color('IGNORE (WEAK)', 'dim')}  #{i:03d}  [ignored for {sentence_num:02d}] {part[:40]}...")
             else:
                 responses[sentence_num] = part
-                tag = 'ASSIGN' if actual_fuzzy >= 40 else 'GUESS'
-                col = 'blue'   if actual_fuzzy >= 40 else 'dim'
+                tag = 'ASSIGN' if actual_fuzzy >= 45 else 'GUESS'
+                col = 'blue'   if actual_fuzzy >= 45 else 'dim'
                 print(f"  {color(tag, col)}  #{i:03d}  →  sentence {sentence_num:02d} (score: {actual_fuzzy:.1f})")
 
-            if target_idx == expected_idx and actual_fuzzy < 40:
-                expected_idx += 1
+    # Cleanups
+    responses = fix_bleed_over(responses, spanish_stimuli)
 
-    return responses
+    # Check if remove_cross_sentence_echoes exists before calling it (from the previous step)
+    if 'remove_cross_sentence_echoes' in globals():
+        responses = remove_cross_sentence_echoes(responses)
 
+    for key in responses:
+        responses[key] = remove_audio_echoes(responses[key])
 
-def write_to_excel(excel_path, file_id, responses):
+    return responsesdef write_to_excel(excel_path, file_id, responses):
     """
     Write responses into column C of the matching participant sheet.
     Any sentence number with no detected response gets '[no response]'.
@@ -517,10 +689,7 @@ def process_transcript(transcript_path, file_id, excel_path):
 
 def infer_participant_id(folder_name):
     m = re.match(r"(\d+)", os.path.basename(folder_name))
-    return str(int(m.group(1))) if m else folder_name
-
-
-def main():
+    return str(int(m.group(1))) if m else folder_namedef main():
     check_requirements()
 
     transcripts_root = "./output"

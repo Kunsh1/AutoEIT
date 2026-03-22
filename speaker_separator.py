@@ -67,11 +67,10 @@ if not hasattr(torchaudio, 'list_audio_backends'): torchaudio.list_audio_backend
 if not hasattr(torchaudio, 'info'): torchaudio.info = _patched_info
 if not hasattr(torchaudio, 'load'): torchaudio.load = _patched_load
 if not hasattr(torchaudio, 'save'): torchaudio.save = _patched_save
-# ═════════════════════════════════════════════════════════════════════════════
-
-from whisperx.diarize import DiarizationPipeline
-
-# ─── HF TOKEN — tries Colab secrets first, then env var, then hardcoded ───────
+# ═════════════════════════════════════════════════════════════════════════════from whisperx.diarize import DiarizationPipeline
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)# ─── HF TOKEN — tries Colab secrets first, then env var, then hardcoded ───────
 def load_hf_token():
     try:
         from google.colab import userdata
@@ -91,9 +90,7 @@ def load_hf_token():
         print(f"  ✅ HF token loaded from hardcoded value: {hardcoded[:8]}...")
         return hardcoded
     print("  ❌ HF_TOKEN not found in Colab secrets, environment, or hardcoded value.")
-    return ""
-
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
+    return ""# ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 INPUT_FOLDER  = "./audio_files"
 OUTPUT_DIR    = "speaker_output"
@@ -165,29 +162,41 @@ def check_requirements():
             missing.append(pkg)
     if missing:
         print(color(f"\n❌ Missing packages. Run:\n\n   pip install {' '.join(missing)}\n", "bold"))
-        sys.exit(1)
-
-
-def process_file(mp3_path, file_output_dir, whisper_model, align_model,
+        sys.exit(1)def process_file(mp3_path, file_output_dir, whisper_model, align_model,
                  metadata, diarize_model, device, token):
     from pydub import AudioSegment
+    from pydub.effects import normalize
     from collections import defaultdict
     import whisperx
+    import subprocess # <-- NEW IMPORT
 
     os.makedirs(file_output_dir, exist_ok=True)
     wav_path = os.path.join(file_output_dir, "_working.wav")
 
-    print(color("  ⏳ Loading audio…", "dim"))
-    audio_pydub    = AudioSegment.from_mp3(mp3_path)
+    print(color("  ⏳ Leveling audio dynamically (FFmpeg dynaudnorm)…", "dim"))
+
+    # ── THE FIX: Dynamic Audio Normalizer ──
+    # f=150: Uses a fast 150ms sliding window to catch quick pauses and drop-offs.
+    # m=15: Allows it to boost quiet sections (like trail-offs) by up to 15x.
+    # This is magic for speech: it keeps sharp words intact while bringing whispers to the front.
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-i", mp3_path,
+        "-af", "dynaudnorm=f=150:m=15",
+        wav_path
+    ]
+
+    try:
+        subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"FFmpeg dynamic normalization failed: {e}")
+
+    # Load the dynamically leveled wav file back into PyDub
+    audio_pydub = AudioSegment.from_wav(wav_path)
     total_duration = len(audio_pydub) / 1000
-    print(f"     ✅ Loaded  ({total_duration:.1f}s)")
 
-    print(color("  ⏳ Normalizing…", "dim"))
-    delta       = TARGET_DBFS - audio_pydub.dBFS
-    audio_pydub = audio_pydub.apply_gain(delta)
-    print(f"     ✅ Normalized  ({delta:+.1f} dB  →  {audio_pydub.dBFS:.1f} dBFS)")
+    print(f"     ✅ Audio dynamically leveled ({total_duration:.1f}s)")
+    # ────────────────────────────────────────
 
-    audio_pydub.export(wav_path, format="wav")
     audio_array = whisperx.load_audio(wav_path)
 
     print(color("  ⏳ Transcribing…", "dim"))
@@ -282,14 +291,16 @@ def process_file(mp3_path, file_output_dir, whisper_model, align_model,
     for spk, clip in sorted(speaker_audio.items()):
         fname     = f"{spk.replace(' ', '_').lower()}.mp3"
         clip_path = os.path.join(file_output_dir, fname)
+
+        # Normalize the isolated output file to max volume without clipping
+        if len(clip) > 0:
+            clip = normalize(clip)
+
         clip.export(clip_path, format="mp3")
         print(f"  ✅ {spk} audio  →  {clip_path}  ({len(clip)/1000:.1f}s)")
 
     os.remove(wav_path)
-    return len(segments)
-
-
-def main():
+    return len(segments)def main():
     check_requirements()
     input_folder = "./input"
     output_root  = "./output"
