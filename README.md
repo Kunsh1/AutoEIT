@@ -127,10 +127,33 @@ Split merged segments are recovered by trying `...`-boundary splits first, then 
 
 ---
 
+## Compatibility Notes
+
+The pipeline runs on current library versions without downgrading anything. Three runtime patches are applied before WhisperX loads (Section 3.1 of the notebook):
+
+- **PyTorch 2.6+** — strict `weights_only` loading disabled for model checkpoints
+- **HuggingFace Hub** — deprecated keyword args (`use_auth_token`, `resume_download`) stripped at call time
+- **torchaudio** — missing API methods shimmed with `soundfile` equivalents
+
+These run automatically. No manual intervention needed.
+
+---
+
+## Future Work (GSoC Project Plan)
+
+1. **Fine-tune Whisper** on lab-provided corrected EIT transcriptions for lower error on L2 speech
+2. **Forced alignment** (Montreal Forced Aligner / WebMAUS) to replace heuristic diarization-based segmentation
+3. **Automated scorer** — `scorer.py` assigning 0–4 rubric scores to pre-transcribed responses (Test II)
+4. **Confidence-based review queue** — flag low-confidence outputs for human review rather than silent acceptance
+5. **Language generalisation** — swap stimulus lists and language models for French, Portuguese, Chinese EIT versions
+6. **Researcher UI** — lightweight web interface so non-technical lab members can run the pipeline
+
+---
+
 ## File Structure
 
 ```
-autoeit-gsoc2026/
+AutoEIT/
 ├── README.md
 ├── speaker_separator.py        ← Stage 1: WhisperX + pyannote diarization
 ├── autoeit_transcriber.py      ← Stage 2: fuzzy alignment + Excel write
@@ -138,3 +161,12 @@ autoeit-gsoc2026/
 ├── AutoEIT.ipynb               ← self-contained Colab notebook
 └── AutoEIT_Sample_Audio_for_Transcribing_FILLED.xlsx
 ```
+
+---
+
+## References
+
+- Ortega et al. (2002). Elicited imitation tasks in crosslinguistic SLA research.
+- Faretta-Stutenberg et al. (2023). Parallel forms reliability of the Spanish EIT. *RMAL 2*(3). https://doi.org/10.1016/j.rmal.2023.100070
+- Bain & Zisserman (2022). WhisperX: Time-Accurate Speech Transcription. https://github.com/m-bain/whisperX
+- Plaquet & Bredin (2023). Powerset multi-class cross entropy loss for neural speaker diarization. *Interspeech 2023.*
