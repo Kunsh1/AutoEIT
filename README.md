@@ -1,8 +1,5 @@
 # AutoEIT — Automated EIT Transcription Pipeline
-### GSoC 2026 Evaluation Submission | HumanAI Foundation (NIU + University of Alabama)
-
-**Proposal:** [Audio-to-text transcription for second/additional language learner data](https://humanai.foundation/gsoc/2026/proposal_AutoEIT1.html)  
-**Mentors:** Mandy Faretta-Stutenberg (NIU), Xabier Granja (University of Alabama)
+### HumanAI Foundation (NIU + University of Alabama)
 
 ---
 
